@@ -32,7 +32,7 @@ class IntBox {
 
 protocol Server {
   func process(box : IntBox) async
-  }
+}
 
 actor NonRacyServer : Server {
   func process(box : IntBox) {
@@ -173,7 +173,7 @@ await handle
 
 When regions are defined as the minimal partition that groups potential aliases and potential reachability, we lose the ability to partially share data structures. Like pure linearity, this is too cumbersome to work with. 
 
-We could try the opposite route - placing values read from fields into fresh regions. The immediate caveat is that we must remember these relationships between regions, or risk the following "double discovery" problem:
+We could try the opposite route - placing values read from fields into fresh regions. This allows the above example that sends away `fst` to concurrently access `snd` as desired. The immediate caveat is that we must remember these relationships between regions, or risk the following "double discovery" problem:
 
 ```swift
 var left1 = pair.left //left1 lives in a fresh region
@@ -182,10 +182,91 @@ var left2 = pair.left //left2 lives in a fresh region as well
 
 Since `left1` and `left2` here live in distinct regions, one could be used while the other was in use by a different concurrency domain - yielding a data race. The solution is to record in our typing context that `pair.left` points to a known region - using the same region label when `pair.left` is read a second time. To implement this, the `ℋ` context discussed above must be augmented to include these relationships: `ℋ = r⟨pair[left ↣ r']⟩, r'⟨⟩`. This way any time `pair.left` is read, the result will be known to live in region `r'`. 
 
-These pointer-bounded regions allow data structures to be broken up and shared across concurrency domains at any desired granularity, but come at a cost: now that we've reified the pointer structure in our typing contexts, we must solve pointer analysis problems to perform typechecking. In particular, it can be very hard to come up with a "most general form" of a typing context that indicates the join of two branches that yield different pointer structures. 
+These pointer-bounded regions allow data structures to be broken up and shared across concurrency domains at any desired granularity, but come at a cost: now that we've reified the pointer structure in our typing contexts, we must solve pointer analysis problems to perform typechecking. In particular, it can be very hard to come up with a "most general form" of a typing context that indicates the join of two branches that yield different pointer structures. Concretely, imagine a loop that iterates along a linked list. The typing context associated with each step of that iteration would specify the the depth attained thusfar, so no general fixpoint would exist and the loop would be untypeable. Alternatively, imagine wanting to be able to return from a function either the `left` *or* the `right` side of a `Pair` data structure - if regions were fully pointer-bounded, no single type for that function would allow both.
 
-### A Happy Medium
+## Isolated Fields
 
-There are 
- 
- 
+To summarize the above section, defining regions so that pointers cannot escape them yields overly large regions that prevent fine-grained sharing of data structures, and defining regions so that pointers must escape them yields overly precise typing contexts that prohibit general purpose programming. The natural solution is a language with *both* types of pointers - region-escaping and region-bounded. By default, pointers will be region-bounded. By placing the `iso` "isolated" annotation on the declaration of a field, the pointers accessed through that field will instead be region-escaping. Good programming patterns will define data structures with a mix of isolated and non-isolated fields. 
+
+The pair data structure could now be written either of these ways:
+
+```swift
+class Pair<T> {
+    var left : T
+    var right : T
+	
+	// this initializer is valid for both Pair and IsoPair
+	func init(l : T, r : T) {
+		left = l
+		right = r
+	}
+
+	// this initializer is NOT valid for IsoPair
+	func init(val : T) {
+		left = val
+		right = val
+	}
+		
+	// unfortunately, only this sequential `process` is valid for Pair
+	func process(l_server : Server<T>, r_server : Server<T>) async {
+		await l_server.process(left)
+		await r_server.process(right)
+	}
+}
+
+class IsoPair<T> {
+	iso var left : T
+	iso var right : T
+	
+	func init(l : T, r : T) {
+		left = l
+		right = r
+	}
+	
+	// IsoPair can implement `process` either sequentially or in parallel
+	func process(l_server : Server<T>, r_server : Server<T>) async {
+		async let l_handle = l_server.process(left)
+		async let r_handle = r_server.process(right)
+		left = await l_handle
+		right = await r_handle
+	}
+}
+```
+
+With this simple data structure, the advantages and disadvantages of `iso` fields are fairly straighforward. `Pair` does not treat its two fields linearly, so initializers have the freedom to use a single value to initialize both. Unfortunately, this means that `Pair` does not have sufficient information to allow its two fields to be processed in parallel. Because some contexts will benefit from increased flexibility, and some will benefit from increased power to parallelize computation, the ability to define `Pair` and `IsoPair` could be advantageous. 
+
+For more complex, possibly recursive, data structures that use isolated fields, the tradeoffs become a bit a more complex. Building up recursive data structures is not possible without the possibility of pointer structures becoming arbitrarily large, so the typing context must allow for isolated fields to be accessed without having to be permantly tracked in `ℋ`. This is done by an invariant stating that the untracked isolated pointers form a tree structure. This means they can be safely dropped from the typing context, while still being able to be re-explored at any time with a fresh region name without risking double discovery.
+
+The nature of this tree-of-untracked-regions invariant directly motivates the design principles around recursive isolated fields: fields should be made isolated when, except for temporary violations, they will form a tree structure. For example, this is true for the spine pointers of a singly linked list, but not of a doubly linked list. That temporary violations are allowed is an important relaxation; even for a singly linked list, operations such as swapping nodes will cause the structure to temporarily pass through a non-tree state. 
+
+## Function Signatures
+
+> incomplete section
+
+In this section, discuss the simple function signatures likely to be used in the implementation of the fearless types system. Namely, parameters' regions can be preserved or consumed, and the results can come from fresh or existing regions. Also discuss the possibility of functions that take pinned regions for increased expressiveness at the call site and decresed expressiveness within the function body.
+
+
+## Function Calls
+
+> incomplete section
+
+In this section, talk about how `ℋ` has to be massaged to match the function signatures in order to perform calls. Ideally, we relax the extent to which this massaging is necessary for standard classes of signatures.
+
+
+## Programming with Concurrency and Futures
+
+> incomplete section
+
+In this section, explain that just starting to use `async` functions with direct `await` calls is no problem - it's typed the same as a regular function invocation - but with futures we need to "move parts of ℋ" into a separate context to indicate that they're gone but they'll be back. Investigate ways to make this ergonomic.
+
+
+## Design Decisions to be Made
+
+### Alternative names for "isolated"
+
+* Region
+* Separable
+* Escaping
+* Tracked
+* Bounding
+* Domain
