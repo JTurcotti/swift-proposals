@@ -262,6 +262,12 @@ In this section, explain that just starting to use `async` functions with direct
 
 ## Design Decisions to be Made
 
+### Should fancier function signatures be exposed?
+
+### Exposing assertions about `ℋ`
+
+This can be good for documenting isolation reasoning, and possibly hinting to the typechecker if for whatever reason inference hits a pathological case.
+
 ### Alternative names for "isolated"
 
 * Region
