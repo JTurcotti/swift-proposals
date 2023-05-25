@@ -32,7 +32,7 @@ class IntBox {
 
 protocol Server {
   func process(box : IntBox) async
-}
+  }
 
 actor NonRacyServer : Server {
   func process(box : IntBox) {
@@ -110,12 +110,82 @@ extension Client {
 }
 ```
 
-The issue here is that *each value is individually linear* (resembling the [*move-only types* proposal](https://github.com/apple/swift-evolution/blob/main/proposals/0390-noncopyable-structs-and-enums.md)). This provides safe concurrency, but is very cumbersome as a programming model. [Fearless types](https://www.cs.cornell.edu/andru/papers/gallifrey-types/) alleviates this burden by introducing *regions*. Regions are static groupings of values that could potentially alias or be reachable from each other. The fearless type system does not treat individual values linearly, but does treat regions linearly; when sharing occurs between concurrency domains, entire regions are gained and lost at a time. The above `aliasingMain` method would thus typecheck exactly as is with fearless types.
+The issue here is that *each value is individually linear* (resembling the [move-only types proposal](https://github.com/apple/swift-evolution/blob/main/proposals/0390-noncopyable-structs-and-enums.md)). This provides safe concurrency, but is very cumbersome as a programming model. [Fearless types](https://www.cs.cornell.edu/andru/papers/gallifrey-types/) alleviates this burden by introducing *regions*. Regions are static groupings of values that could potentially alias or be reachable from each other. The fearless type system does not treat individual values linearly, but does treat regions linearly; when sharing occurs between concurrency domains, entire regions are gained and lost at a time. The above `aliasingMain` method would thus typecheck exactly as is with fearless types. Aliasing is undecidable in general, so, as the following example demonstrates, regions are a conservative approximation.
 
+```swift
+extension Client {
+    func possiblyAliasingMain() async {
+        let definiteAlias = box //`box` is in a region
+        let possibleAlias = if ... ? IntBox() : box //same region as `box` due to possible aliasing
+        let notAlias = IntBox() //`notAlias` gets a fresh region
+        
+        async let handle = server.process(box: box)
+        
+        print(notAlias) //safe - was not in the region that was sent
+        print(possibleAlias) //Error: unsafe - in the sent region
+        print(box) //Error: unsafe - in the sent region
+        
+        await handle
+        
+        //all three variable safe to access again
+    }
+}
+```
 
+### Implementation
 
+To realize this idea of linear ownership regions - we need to make two additions to our standard typing context `Γ ::= x : τ, Γ | ε` that associates variables `x` with types `τ`. First, we must extend `Γ` to include region labels as well: `x : r τ` instead of `x : τ`. Second, we must add a context `ℋ ::= r, ℋ | ε` that lists the regions currently owned. `Γ` now has *strong update* semantics - to write `x = y` it must be the case that `x` and `y` have the same type, but their region may differ (i.e. `Γ ⊢ x : r τ` and `Γ ⊢ y : r' τ`). After the update, `Γ ⊢ x : r' τ`. This yields the desired behavior for aliases obtaining the same region labels. Value-semantic types can always be safely given fresh region labels. To unify the branches of conditionals that yield differing region labels for the same variable, it may be necessary to *attach* regions; merging their labels. Fresh regions get added to `ℋ`, and communicating across concurrency domains causes the appropriate reasons to be added/dropped from `ℋ` without altering `Γ`. Full rules for this system can be found in the [appendix](https://www.cs.cornell.edu/andru/papers/gallifrey-types/appendix.pdf) of the fearless types paper.
 
+## Regions and Pointers
 
+```swift
+class Pair<L, R> {
+    var left : L
+    var right : R
+}
 
+func main() {
+    let fst = IntBox()
+    let snd = IntBox()
+    let pair = Pair(fst, snd)
+    
+    async let handle = server.process(pair)
+    
+    //unsafe to use `fst` or `snd` as well as `pair`
+    
+    await handle
+}
+```
 
+What happens if we throw a pointer structure into the mix? In the above example, we send a `pair` (by reference) to the server, which would allow it to access both the `left` and `right` fields as well. Thus if the client retained access to those fields, we'd have a data race. Thus regions must grow to include not just potential aliases, but potential reachability in the object graph as well. This immediately presents a bit of an issue:
 
+```swift
+let fst = IntBox()
+let snd = IntBox()
+let pair = Pair(fst, snd)
+    
+async let handle = server.process(fst)
+    
+//unsafe to use `snd` :(
+
+await handle
+```
+
+When regions are defined as the minimal partition that groups potential aliases and potential reachability, we lose the ability to partially share data structures. Like pure linearity, this is too cumbersome to work with. 
+
+We could try the opposite route - placing values read from fields into fresh regions. The immediate caveat is that we must remember these relationships between regions, or risk the following "double discovery" problem:
+
+```swift
+var left1 = pair.left //left1 lives in a fresh region
+var left2 = pair.left //left2 lives in a fresh region as well
+```
+
+Since `left1` and `left2` here live in distinct regions, one could be used while the other was in use by a different concurrency domain - yielding a data race. The solution is to record in our typing context that `pair.left` points to a known region - using the same region label when `pair.left` is read a second time. To implement this, the `ℋ` context discussed above must be augmented to include these relationships: `ℋ = r⟨pair[left ↣ r']⟩, r'⟨⟩`. This way any time `pair.left` is read, the result will be known to live in region `r'`. 
+
+These pointer-bounded regions allow data structures to be broken up and shared across concurrency domains at any desired granularity, but come at a cost: now that we've reified the pointer structure in our typing contexts, we must solve pointer analysis problems to perform typechecking. In particular, it can be very hard to come up with a "most general form" of a typing context that indicates the join of two branches that yield different pointer structures. 
+
+### A Happy Medium
+
+There are 
+ 
+ 
