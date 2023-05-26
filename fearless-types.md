@@ -396,7 +396,49 @@ Here, creation of the future (`async let`) moves the region of `x` out of `ℋ` 
 
 Now let's see why these rules prevent a parallel `Pair.process` from typechecking:
 
-> write this
+```swift
+class Pair<T> {
+	...
+	func process(l_server : Server<T>, r_server : Server<T>) async {
+		// `l_sever` and `r_server` omitted from contexts for simplicity
+		// ℋ: r₀⟨⟩; Γ: self: r₀ Pair<T>; Φ: ∅
+		async let l_handle = l_server.process(left)
+		// ℋ: ∅; Γ: self: r₀ Pair<T>; Φ: l_handle: (r₀⟨⟩, ∅, ∅)
+		async let r_handle = r_server.process(right) //Error: `self` not accessible - region is held by future handle `l_handle`
+		await l_handle
+		await r_handle
+	}
+```	
+
+Now let's see why parallel `IsoPair.process` does typecheck:
+
+```swift
+class IsoPair<T> {
+	...
+	func process(l_server : Server<T>, r_server : Server<T>) async {
+		// `l_sever` and `r_server` omitted from contexts for simplicity
+		// ℋ: r₀⟨⟩; Γ: self: r₀ IsoPair<T>; Φ: ∅
+		// ↑ explore self.left ↓
+		// ℋ: r₀⟨self[left ↣ r₁]⟩, r₁⟨⟩; Γ: self: r₀ IsoPair<T>; Φ: ∅
+		async let l_handle = l_server.process(left)
+		// ℋ: r₀⟨self[left ↣ r₁]⟩; Γ: self: r₀ IsoPair<T>; Φ: l_handle: (r₁⟨⟩, ∅, ∅)
+		// ↑ explore self.right ↓
+		// ℋ: r₀⟨self[left ↣ r₁, right ↣ r₂]⟩, r₂⟨⟩; Γ: self: r₀ IsoPair<T>; Φ: l_handle: (r₁⟨⟩, ∅, ∅)
+		async let r_handle = r_server.process(right)
+		// ℋ: r₀⟨self[left ↣ r₁, right ↣ r₂]⟩; Γ: self: r₀ IsoPair<T>; Φ: l_handle: (r₁⟨⟩, ∅, ∅), r_handle: (r₂⟨⟩, ∅, ∅)
+		...
+		//perform other work... note neither `self.left` or `self.right` is accessible here, but `self` and its other fields are
+		//also... the function can't return here!
+		...
+		await l_handle
+		// ℋ: r₀⟨self[left ↣ r₁, right ↣ r₂]⟩, r₁⟨⟩; Γ: self: r₀ IsoPair<T>; Φ: r_handle: (r₂⟨⟩, ∅, ∅)
+		await r_handle
+		// ℋ: r₀⟨self[left ↣ r₁, right ↣ r₂]⟩, r₁⟨⟩, r₂⟨⟩; Γ: self: r₀ IsoPair<T>; Φ: ∅
+		// ↑ retract self.right, retract self.left ↓
+		// ℋ: r₀⟨⟩; Γ: self: r₀ IsoPair<T>; Φ: ∅
+		//function can return!
+	}
+```	
 
 ## Function Signatures
 
@@ -411,10 +453,16 @@ In this section, discuss the simple function signatures likely to be used in the
 
 In this section, talk about how `ℋ` has to be massaged to match the function signatures in order to perform calls. Ideally, we relax the extent to which this massaging is necessary for standard classes of signatures.
 
+## Branch Unification
+
+> incomplete section
+
+In this section, talk about "the hard part" of typechecking - branch unification. Basically, all other inference tasks are syntax-directed, but unifying branches correctly involved nonlocal reasoning and possibly backtracking. Discuss the fact that heuristics work to prevent backtracking on all example code written so far, but at large scale alternatives might need to be discussed.
+
 
 ## Programming with Concurrency and Futures
 
-> incomplete section
+> incomplete section 
 
 In this section, explain that just starting to use `async` functions with direct `await` calls is no problem - it's typed the same as a regular function invocation - but with futures we need to "move parts of ℋ" into a separate context to indicate that they're gone but they'll be back. Investigate ways to make this ergonomic.
 
@@ -429,10 +477,12 @@ This can be good for documenting isolation reasoning, and possibly hinting to th
 
 ### Alternative names for "isolated"
 
+Swift already uses the word "isolated" in the context of "actor-isolated" storage. Perhaps a distinct name would be easier. Here are some ideas:
+
 * Region
 * Boundary
+* Bounding
 * Separable
 * Escaping
 * Tracked
-* Bounding
 * Domain
