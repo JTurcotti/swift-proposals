@@ -237,7 +237,55 @@ With this simple data structure, the advantages and disadvantages of `iso` field
 
 For more complex, possibly recursive, data structures that use isolated fields, the tradeoffs become a bit a more complex. Building up recursive data structures is not possible without the possibility of pointer structures becoming arbitrarily large, so the typing context must allow for isolated fields to be accessed without having to be permantly tracked in `ℋ`. This is done by an invariant stating that the untracked isolated pointers form a tree structure. This means they can be safely dropped from the typing context, while still being able to be re-explored at any time with a fresh region name without risking double discovery.
 
-The nature of this tree-of-untracked-regions invariant directly motivates the design principles around recursive isolated fields: fields should be made isolated when, except for temporary violations, they will form a tree structure. For example, this is true for the spine pointers of a singly linked list, but not of a doubly linked list. That temporary violations are allowed is an important relaxation; even for a singly linked list, operations such as swapping nodes will cause the structure to temporarily pass through a non-tree state. 
+The nature of this tree-of-untracked-regions invariant directly motivates the design principles around recursive isolated fields: fields should be made isolated when, except for temporary violations, they will form a tree structure. For example, this is true for the spine pointers of a singly linked list, but not of a doubly linked list. That temporary violations are allowed is an important relaxation; even for a singly linked list, operations such as swapping nodes will cause the structure to temporarily pass through a non-tree state. For example, we could write the following `swap` function for our `IsoPair`:
+
+```swift
+extension IsoPair<T> {
+	func swap() {
+		let temp = left
+		left = right //after this assignment, `left` and `right` alias each other
+		right = temp
+	}
+}
+```
+
+This `swap` function violates not just linearity of values, but even linearity of regions; `left` and `right` are isolated fields, so they should point to fresh regions, but they do not - they point to the same region. `swap` typechecks because our system determines that this is just a temporary violation. This increased expressivity makes programming much easier. Here's the same example with typing contexts added:
+
+```swift
+extension IsoPair<T> {
+	func swap() {
+		// ℋ: r₀⟨⟩; Γ: self: r₀ IsoPair<T>
+		let temp = left
+		// ℋ: r₀⟨self[left ↣ r₁]⟩, r₁⟨⟩; Γ: self: r₀ IsoPair<T>, temp : r₁ T
+		// ↑ can be implicitly elaborated to ↓ - this is called "focus and explore"
+		// ℋ: r₀⟨self[left ↣ r₂, right ↣ r₁]⟩, r₁⟨⟩, r₂⟨⟩; Γ: self: r₀ IsoPair<T>, temp : r₁ T //tree invariant holds
+		left = right //after this assignment, `left` and `right` alias each other
+		// ℋ: r₀⟨self[left ↣ r₂, right ↣ r₂]⟩, r₁⟨⟩, r₂⟨⟩; Γ: self: r₀ IsoPair<T>, temp : r₁ T //tree invariant broken
+		right = temp
+		// ℋ: r₀⟨self[left ↣ r₂, right ↣ r₁]⟩, r₁⟨⟩, r₂⟨⟩; Γ: self: r₀ IsoPair<T>, temp : r₁ T //tree invariant holds
+		// ↑ can be implicitly simplified to ↓ - this is called "retract and unfocus"
+		// ℋ: r₀⟨⟩; Γ: self: r₀ IsoPair<T>, temp : r₁ T //note `temp` is still in scope as a variable, but inaccessible - its region has been dropped
+	}
+}
+```
+
+Although it may appear intimidating, all the typing contexts are doing in the above example is encoding the minimal graph structure involved in this example: two fields are explored in a tree-like state, temporarily deviate from that state, then are returned to it. For symmetry, here's what typechecking `swap` for the non-isolated `Pair` would look like:
+
+```swift
+extension Pair<T> {
+	func swap() {
+		// ℋ: r₀⟨⟩; Γ: self: r₀ Pair<T>
+		let temp = left
+		// ℋ: r₀⟨⟩; Γ: self: r₀ Pair<T>, temp : r₀ T
+		left = right
+		// ℋ: r₀⟨⟩; Γ: self: r₀ Pair<T>, temp : r₀ T
+		right = temp
+		// ℋ: r₀⟨⟩; Γ: self: r₀ Pair<T>, temp : r₀ T
+	}
+}
+```
+
+The interesting part of typechecking `Pair.swap` is that there is no interesting part; no fields need appear in the typing context because only isolated fields need to be tracked that way. A second (or third) region is never introduced, because fresh regions only get introduced when reading isolated fields, not non-isolated fields. `temp` remains accessible throughout the entire function. Finally, the function would've typechecked even if the final assignment `right = temp` were removed - this is in contrast to `IsoPair.swap` in which the function would have been rejected by the typechecker if that final assignment were not in place to return the function to a tree-like state.
 
 ## Function Signatures
 
@@ -271,6 +319,7 @@ This can be good for documenting isolation reasoning, and possibly hinting to th
 ### Alternative names for "isolated"
 
 * Region
+* Boundary
 * Separable
 * Escaping
 * Tracked
