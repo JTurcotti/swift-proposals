@@ -27,15 +27,15 @@ so Swift currently cannot allow this natural programming pattern.
 
 ```swift
 class IntBox {
-  var x = 0
+	var x = 0
 }
 
 protocol Server {
-  func process(box : IntBox) async
+	func process(box : IntBox) async
 }
 
 actor NonRacyServer : Server {
-  func process(box : IntBox) {
+	func process(box : IntBox) {
     // for this actor to modify the contents of a passed box - it must *take ownership* of the box
     box.x = box.x + 1
     // after the call, ownership is returned to the calling actor
@@ -43,18 +43,19 @@ actor NonRacyServer : Server {
 }
 
 actor Client {
-  let box : IntBox = IntBox()
-  let server : Server = NonRacyServer()
+	let box : IntBox = IntBox()
+	let server : Server = NonRacyServer()
 
-  func main() async {
-    // the `box` value is owned by this actor, so access is safe
-    print("pre: the box contains \(box.x)")
-  
-    // this call temporarily transfers ownership to the Server actor
-    await server.process(box: box)
-      
-    // after the call, ownership of `box` is returned to this actor, so access is again safe
-    print("post: the box contains \(box.x)")
+	func main() async {
+		// the `box` value is owned by this actor, so access is safe
+		print("pre: the box contains \(box.x)")
+		
+		// this call temporarily transfers ownership to the Server actor
+		await server.process(box: box)
+		
+		// after the call, ownership of `box` is returned to this actor, so access is again safe
+		print("post: the box contains \(box.x)")
+	}
 }
 ```
 
@@ -62,15 +63,15 @@ This example works out of the box with any reasonable linear ownership type syst
 
 ```swift
 actor RacyServer : Server {
-  var oldBox : IntBox = IntBox()
-
-  func process(box : IntBox) {
-    // takes ownership of `box`
-    box.x = box.x + oldBox.x
-    // transfers ownership to the field `oldBox`
-    oldBox = box
-    // Error: cannot return ownership of `box` to the caller because the field `oldBox` has ownership instead
-  }
+	var oldBox : IntBox = IntBox()
+	
+	func process(box : IntBox) {
+		// takes ownership of `box`
+		box.x = box.x + oldBox.x
+		// transfers ownership to the field `oldBox`
+		oldBox = box
+		// Error: cannot return ownership of `box` to the caller because the field `oldBox` has ownership instead
+	}
 }
 ```
 
@@ -78,15 +79,15 @@ actor RacyServer : Server {
 
 ```swift
 extension Client {
-  func unsafeMain() async {
-    async let handle = server.process(box: box)
-    
-    print(box.x) // Error: ownership has been transered to the server, so this access is unsafe
-      
-    await handle
-      
-    print(box.x) // ownership has been returned to the client, so this access is safe
-  }
+	func unsafeMain() async {
+		async let handle = server.process(box: box)
+		
+		print(box.x) // Error: ownership has been transered to the server, so this access is unsafe
+	
+		await handle
+		
+		print(box.x) // ownership has been returned to the client, so this access is safe
+	}
 }
 ```
 
@@ -96,17 +97,17 @@ So far ownership seems like a silver bullet for handling the sharing of mutable 
 
 ```swift
 extension Client {
-  func aliasingMain() async {
-    let boxAlias = box
+	func aliasingMain() async {
+		let boxAlias = box
     
-    async let handle = server.process(box: box)
+		async let handle = server.process(box: box)
     
-    //ideally, both `box` and `boxAlias` would be inaccessible here
+		//ideally, both `box` and `boxAlias` would be inaccessible here
     
-    await handle
+		await handle
     
-    //ideally both `box` and `boxAlias` would be once again accessible here
-  }
+		//ideally both `box` and `boxAlias` would be once again accessible here
+	}
 }
 ```
 
@@ -114,8 +115,8 @@ The issue here is that *each value is individually linear* (resembling the [move
 
 ```swift
 extension Client {
-    func possiblyAliasingMain() async {
-        let definiteAlias = box //`box` is in a region
+	func possiblyAliasingMain() async {
+		let definiteAlias = box //`box` is in a region
         let possibleAlias = if ... ? IntBox() : box //same region as `box` due to possible aliasing
         let notAlias = IntBox() //`notAlias` gets a fresh region
         
@@ -192,8 +193,8 @@ The pair data structure could now be written either of these ways:
 
 ```swift
 class Pair<T> {
-    var left : T
-    var right : T
+	var left : T
+	var right : T
 	
 	// this initializer is valid for both Pair and IsoPair
 	func init(l : T, r : T) {
@@ -227,8 +228,8 @@ class IsoPair<T> {
 	func process(l_server : Server<T>, r_server : Server<T>) async {
 		async let l_handle = l_server.process(left)
 		async let r_handle = r_server.process(right)
-		left = await l_handle
-		right = await r_handle
+		await l_handle
+		await r_handle
 	}
 }
 ```
@@ -269,7 +270,10 @@ extension IsoPair<T> {
 }
 ```
 
-Although it may appear intimidating, all the typing contexts are doing in the above example is encoding the minimal graph structure involved in this example: two fields are explored in a tree-like state, temporarily deviate from that state, then are returned to it. For symmetry, here's what typechecking `swap` for the non-isolated `Pair` would look like:
+Although it may appear intimidating, all the typing contexts are doing in the above example is encoding the minimal graph structure involved in this example: two fields are explored in a tree-like state, temporarily deviate from that state, then are returned to it. Note that some typing rules, such as to read an isolated field, require `ℋ` to have a specific form, such as the presence of that isolated field. Similarly, the typing rule for functions requires the starting and finishing typing contexts to exactly match those expected by the signature of the function. Here, that means `self` is in a region with no tracked state. The implicit elaborations and simplifications mentioned above are necessary to help these typing rules apply, and come from a language of *virtual transformations*. Virtual transformations allow the typing context to be subsituted for an alternative that captures the same, or strictly less, information. To successfully typecheck programs, these must be inferred by the compiler. 
+
+
+For symmetry, here's what typechecking `swap` for the non-isolated `Pair` would look like:
 
 ```swift
 extension Pair<T> {
@@ -286,6 +290,113 @@ extension Pair<T> {
 ```
 
 The interesting part of typechecking `Pair.swap` is that there is no interesting part; no fields need appear in the typing context because only isolated fields need to be tracked that way. A second (or third) region is never introduced, because fresh regions only get introduced when reading isolated fields, not non-isolated fields. `temp` remains accessible throughout the entire function. Finally, the function would've typechecked even if the final assignment `right = temp` were removed - this is in contrast to `IsoPair.swap` in which the function would have been rejected by the typechecker if that final assignment were not in place to return the function to a tree-like state.
+
+### More Expressiveness Differences between Isolated and Non-Isolated fields
+
+Why stop at typechecking `swap`? Let's look at the typing contexts behind the other claims made above about the differences between `Pair` and `IsoPair`.
+
+#### 2-Arg Initializer
+
+The 2-arg initializer typechecks in both `Pair` and `IsoPair`, but with slightly different mechanisms:
+
+```swift
+class Pair<T> {
+	...
+	func init(l : T, r : T) {
+		// ℋ: r₀⟨⟩, r₁⟨⟩, r₂⟨⟩; Γ: self: r₀ Pair<T>, l: r₁ T, r: r₂ T //each arg comes from a distinct region
+		// ↑ can be implicitly coerced to ↓ - this is called "attach"
+		// ℋ: r₀⟨⟩, r₂⟨⟩; Γ: self: r₀ Pair<T>, l: r₀ T, r: r₂ T //can only assign non-isolated fields of a value to another value in the same region
+		left = l
+		// ℋ: r₀⟨⟩, r₂⟨⟩; Γ: self: r₀ Pair<T>, l: r₀ T, r: r₂ T //assignment has no effect on typing context
+		// ↑ can be implicitly coerced to ↓ - this is another "attach"
+		// ℋ: r₀⟨⟩; Γ: self: r₀ Pair<T>, l: r₀ T, r: r₀ T
+		right = r
+		// ℋ: r₀⟨⟩; Γ: self: r₀ Pair<T>, l: r₀ T, r: r₀ T
+	}
+}
+```
+
+2-arg `Pair.init` highlights an important invariant mentioned above: non-isolated cannot cross regions. Because arguments to a function by default come from distinct regions, the *attach* virtual transformation is necessary to 'forget' the fact that `self`, `l`, and `r` come from distinct regions. This is a strictly information losing operation, unlike *explore*, *retract*, and *focus* above that are information-preserving. Other than the application of the attach transformation, typechecking `Pair.init` is straightforward, as no isolated fields are involved. 
+
+```swift
+class IsoPair<T> {
+	...
+	func init(l : T, r: T) {
+		// ℋ: r₀⟨self[left ↣ ⊥, right ↣ ⊥]⟩, r₁⟨⟩, r₂⟨⟩; Γ: self: r₀ IsoPair<T>, l: r₁ T, r: r₂ T
+		left = l
+		// ℋ: r₀⟨self[left ↣ r₁, right ↣ ⊥]⟩, r₁⟨⟩, r₂⟨⟩; Γ: self: r₀ IsoPair<T>, l: r₁ T, r: r₂ T
+		right = r
+		// ℋ: r₀⟨self[left ↣ r₁, right ↣ r₂]⟩, r₁⟨⟩, r₂⟨⟩; Γ: self: r₀ IsoPair<T>, l: r₁ T, r: r₂ T
+		// ↑ can be implicitly coerced to ↓ - two "retract"s and an "unfocus"
+		// ℋ: r₀⟨⟩; Γ: self: r₀ Pair<T>, l: r₁ T, r: r₂ T //note `l` and `r` are inaccessible
+	}
+}
+```
+
+2-arg `IsoPair.init` is also simple, and highlights properties of `ℋ` we've already seen above: assignments of isolated fields must be exactly reflected in `ℋ`, and to return from a function the regions of results such as `self` must be in a simple state. Performing the *retract*s mentioned in the example render the arguments `l` and `r` inacccessible - this is exactly what we want. If `l` and `r` were still accessible but not known to be reachable from `self`, they could be sent to another thread before `init` returns, yielding dobule-ownership and a potential race. Also of slight note is the way that initialization of isolated fields can be handled. Here, we choose to typecheck initializers by using a starting typing context of `r₀⟨self[left ↣ ⊥, right ↣ ⊥]⟩`. The `⊥` indicates that the isolated fields `left` and `right` point to inaccessible regions - to access the fields or to return from the function, they must first be assigned to an accessible region. In a language such as Swift that already enforces those two rules, using the simple starting type of `r₀⟨⟩` for `self`'s region would also be sound, but would yield typing contexts that contain "phantom" regions that appear accessible but are not. This is a design decision to potentially be made down the road.
+
+#### 1-Arg Initializer.
+
+The 1-arg initializer typechecks only for `Pair`:
+
+```swift
+class Pair<T> {
+	...
+	func init(val : T) {
+		// ℋ: r₀⟨⟩, r₁⟨⟩; Γ: self: r₀ Pair<T>, val : r₁ T
+		// ↑ attach ↓
+		// ℋ: r₀⟨⟩; Γ: self: r₀ Pair<T>, val : r₀ T
+		left = val
+		// same context as above
+		right = val
+		// same context as above
+	}
+}
+```
+
+Typechecking the 1-arg `Pair.init` is nearly identical to its 2-arg counterpart, all that changes is we need to perform only 1 attach instead of 2. This is expected: non-isolated fields "don't care" about aliasing/uniqueness of their values so re-using the same value for two non-isolated fields should be just as easy as using distinct values. Now let's try to do this for `IsoPair`:
+
+```swift
+class IsoPair<T> {
+	...
+	func init(val : T) {
+		// ℋ: r₀⟨self[left ↣ ⊥, right ↣ ⊥]⟩, r₁⟨⟩; Γ: self: r₀ IsoPair<T>, val : r₁ T
+		left = val
+		// ℋ: r₀⟨self[left ↣ r₁, right ↣ ⊥]⟩, r₁⟨⟩; Γ: self: r₀ IsoPair<T>, val : r₁ T
+		right = val
+		// ℋ: r₀⟨self[left ↣ r₁, right ↣ r₁]⟩, r₁⟨⟩; Γ: self: r₀ IsoPair<T>, val : r₁ T
+		// Error: region `r₀` of `self` cannot be reduced to simple state at conclusion of function `init`
+	}
+}
+```
+
+We can't typecheck a 1-arg `IsoPair.init`. The two assignments both typecheck, but we're left with the context `ℋ: r₀⟨self[left ↣ r₁, right ↣ r₁]⟩, r₁⟨⟩`. The signature of `init` specifies `r₀⟨⟩` as the desired output type for the region of `self`, which clearly doesn't match exactly what we've got but it looks like maybe some inferred *retract*s could do the job. WLOG, we could try *retract `self.left`*, which would give us `ℋ: r₀⟨self[right ↣ r₁]⟩` - retract removes the isolated field `self.left` from tracking and drops the region `r₁` that it pointed to. This latter part, dropping the region it pointed to, is vital to prevent the "double discovery" problem mentioned earlier; if we let `r₁` stick around, leaving `val` accessible as well, we could re-explore `self.left` with an assignment like `badVar = self.left`, and get a new region label to access `badVar` with while still being able to access `val` through `r₁`. This opens us up to data races, because now we could keep `val` while giving another thread access to `badVar`. Thus the fact that *retract* has the signature `r⟨x[f ↣ r', F]⟩, r'⟨⟩ ↦ r⟨x[F]⟩` instead of `r⟨x[f ↣ r', F]⟩ ↦ r⟨x[F]⟩` is vital. So though we can apply *retract* once to remove `self.left` from `ℋ`, there will be no way to also also remove `self.right`. Morally, it functions as a tombstone.
+
+Of course, we don't want to allow this `init` function anyways - so this ill-typedness is a desired result.
+
+#### Parallel process 
+	
+> Note: this section uses a preliminary formalization of futures into the fearless types context involving a separate context Φ, this is meant to be a placeholder for whatever alternate formalizations (such as rolling that information directly into Γ or ℋ) eventually fit most nicely with the desired behavior of futures.
+
+We've alluded to, but haven't actually seen instances of any communcation between concurrency domains in the above examples. To provide the first one, let's say we have a function `server.foo` with signature `(ℋ: r₀⟨⟩; Γ: x: r₀ T) → (ℋ: r₀⟨⟩, r₁⟨⟩; Γ: x: r₀ T, result: r₁ S)`. This could be declared with syntax such as `func foo(preserves x : T) → (fresh S)` - indicating that it takes an argument of type `T`, and leaves that argument accessible to the caller while also providing a result of type `S` in a fresh region. Calling `server.foo` could appear as follows:
+
+```swift
+let x : T = ...
+// ℋ: r₀⟨⟩; Γ: x: r₀ T; Φ: ∅
+async let y̅ = server.foo(x)
+// ℋ: ∅; Γ: x: r₀ T; Φ: y̅: (r₀⟨⟩, r₁⟨⟩, r₁, S)
+... 
+//note for whatever computation happens here, `x` is still in scope but inaccessible
+...
+let y = await y̅
+// ℋ: r₀⟨⟩, r₁⟨⟩; Γ: x: r₀ T, y: t₁ S; Φ: ∅
+```
+
+Here, creation of the future (`async let`) moves the region of `x` out of `ℋ` and adds a new 3-tuple to Φ recording 1) the region types that will be returned to `ℋ` when the future completes 2) the region of the resulting value 3) the type of the resulting value. Redeeming the future (`await`) removes the binding from `Φ`, and returns the appropriate region types to `ℋ`. 
+
+Now let's see why these rules prevent a parallel `Pair.process` from typechecking:
+
+> write this
 
 ## Function Signatures
 
