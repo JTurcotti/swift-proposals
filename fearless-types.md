@@ -1,4 +1,4 @@
-# An Intro to Fearless Types
+# An Intro to Fearless Types in Swift
 
 * Authors: [Joshua Turcotti](https://github.com/JTurcotti)
 
@@ -376,7 +376,7 @@ Of course, we don't want to allow this `init` function anyways - so this ill-typ
 
 #### Parallel process 
 	
-> Note: this section uses a preliminary formalization of futures into the fearless types context involving a separate context Φ, this is meant to be a placeholder for whatever alternate formalizations (such as rolling that information directly into Γ or ℋ) eventually fit most nicely with the desired behavior of futures.
+> Note: this section uses a preliminary formalization of futures into the fearless types context involving a separate context `Φ`, this is meant to be a placeholder for whatever alternate formalizations (such as rolling that information directly into `Γ` or `ℋ`) eventually fit most nicely with the desired behavior of futures. Other formalization, such as marking regions in `ℋ` with a handle idntifier but not removing them, or elaborating the types that can appear in `Γ`, might be more elegant, but will be more confusing on first exposition.
 
 We've alluded to, but haven't actually seen instances of any communcation between concurrency domains in the above examples. To provide the first one, let's say we have a function `server.foo` with signature `(ℋ: r₀⟨⟩; Γ: x: r₀ T) → (ℋ: r₀⟨⟩, r₁⟨⟩; Γ: x: r₀ T, result: r₁ S)`. This could be declared with syntax such as `func foo(preserves x : T) → (fresh S)` - indicating that it takes an argument of type `T`, and leaves that argument accessible to the caller while also providing a result of type `S` in a fresh region. Calling `server.foo` could appear as follows:
 
@@ -410,6 +410,8 @@ class Pair<T> {
 	}
 ```	
 
+When `l_server.process(left)` is called, the region of `self.left` is moved into `Φ` under a handle so that it cannot be accessed until the handle is redeemed. Unfortunately, because `self.left` is a non-isolated field that region was the regin of the entire `Pair` object! So now the entire object is unusable until the future is redeemed. This is not necessarily a bad programming pattern, it could make sense for an actor or other concurrency domain to hand off all or a very large portion of their state to another domain then do computation that doesn't involve that state while waiting, but in this particular context it prevents `self.right` from being processed in parallel.
+
 Now let's see why parallel `IsoPair.process` does typecheck:
 
 ```swift
@@ -439,6 +441,8 @@ class IsoPair<T> {
 		//function can return!
 	}
 ```	
+
+Each field of the pair is accessed at a distinct region, meaning that neither the original region of `self` or the regions corresponding to any other fields of `self` are lost when a future is passed one field. This allows a parallel `IsoPair.process` to typecheck seamlessly. Note the intermediate context held by the `process` function while both call are being concurrently handled by servers: `ℋ: r₀⟨self[left ↣ r₁, right ↣ r₂]⟩`. Both `self.left` and `self.right` are "tombstoned" to indicate that though `self` is accessible, those two fields are not until they are re-assigned or the corresponding future is redeemed.
 
 ## Function Signatures
 
