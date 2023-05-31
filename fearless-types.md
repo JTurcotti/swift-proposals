@@ -36,9 +36,9 @@ protocol Server {
 
 actor NonRacyServer : Server {
 	func process(box : IntBox) {
-    // for this actor to modify the contents of a passed box - it must *take ownership* of the box
-    box.x = box.x + 1
-    // after the call, ownership is returned to the calling actor
+		// for this actor to modify the contents of a passed box - it must *take ownership* of the box
+		box.x = box.x + 1
+		// after the call, ownership is returned to the calling actor
   }
 }
 
@@ -83,7 +83,7 @@ extension Client {
 		async let handle = server.process(box: box)
 		
 		print(box.x) // Error: ownership has been transered to the server, so this access is unsafe
-	
+		
 		await handle
 		
 		print(box.x) // ownership has been returned to the client, so this access is safe
@@ -99,13 +99,13 @@ So far ownership seems like a silver bullet for handling the sharing of mutable 
 extension Client {
 	func aliasingMain() async {
 		let boxAlias = box
-    
+		
 		async let handle = server.process(box: box)
-    
+		
 		//ideally, both `box` and `boxAlias` would be inaccessible here
-    
+		
 		await handle
-    
+		
 		//ideally both `box` and `boxAlias` would be once again accessible here
 	}
 }
