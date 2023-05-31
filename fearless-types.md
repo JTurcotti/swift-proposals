@@ -16,7 +16,7 @@ will often turn out to be un-typeable. [Recent work](https://www.cs.cornell.edu/
 types to achieve safe concurrency (i.e. race freedom) without constraining natural programming patterns. In the tradition of Rust, this goal is called 
 *Fearless Concurrency*, and we will call the type system presented in that paper *fearless types*.
 
-This document outlines what fearless types could look like if implemented in Swift.
+This document outlines what fearless types could look like if implemented in Swift. Of important note, this system makes sense to apply directly only to [reference-semantic](https://developer.apple.com/swift/blog/?id=10) types. The embedding that allows this is discussed [Handing value types](#handling-value-types).
 
 ## Linear Ownership Types
 
@@ -441,14 +441,67 @@ class IsoPair<T> {
 	}
 ```	
 
-Each field of the pair is accessed at a distinct region, meaning that neither the original region of `self` or the regions corresponding to any other fields of `self` are lost when a future is passed one field. This allows a parallel `IsoPair.process` to typecheck seamlessly. Note the intermediate context held by the `process` function while both call are being concurrently handled by servers: `ℋ: r₀⟨self[left ↣ r₁, right ↣ r₂]⟩`. Both `self.left` and `self.right` are "tombstoned" to indicate that though `self` is accessible, those two fields are not until they are re-assigned or the corresponding future is redeemed.
+Each field of the pair is accessed at a distinct region, meaning that neither the original region of `self` nor the regions corresponding to any other fields of `self` are lost when a future is passed one field. This allows a parallel `IsoPair.process` to typecheck seamlessly. Note the intermediate context held by the `process` function while both call are being concurrently handled by servers: `ℋ: r₀⟨self[left ↣ r₁, right ↣ r₂]⟩`. Both `self.left` and `self.right` are "tombstoned" to indicate that though `self` is accessible, those two fields are not until they are re-assigned or the corresponding future is redeemed.
 
 ## Function Signatures
 
-> incomplete section
+Function signatures must capture the information expected to be present in `ℋ`. Fully expressive function signatures would thus require input and output `ℋ` explicitly written down, but this is prohibitively verbose. Instead, a good fearless types language design would likely expose the following features for describing expected `ℋ` contexts.
 
-In this section, discuss the simple function signatures likely to be used in the implementation of the fearless types system. Namely, parameters' regions can be preserved or consumed, and the results can come from fresh or existing regions. Also discuss the possibility of functions that take pinned regions for increased expressiveness at the call site and decresed expressiveness within the function body.
+### Consuming
 
+Here is a simple actor with two methods (more omitted):
+
+
+```swift
+
+actor ListHolder<T> {
+	iso var list : ListNode<T>
+	
+	func addHead(t : consuming T) {
+		list = ListNode(head: t, tail : list)
+	}
+	
+	func compareToHead(t : T) -> bool {
+		return t > list.head
+	}
+}
+```
+
+The actor internally holds a reference to a singly linked list, and has methods that add a new head node to that list, and that compare a value to the currrent head. The signatures of the two methods are very similar, with a single important distinction: `addHead` needs to indicate that the region of its argument `t` is no longer accessible to the caller after the call returns. In contrast, `compareToHead` should allow the caller to continue using the value it passes after the call returns, along with anything else in the same region. This distinction is captured by the `consuming` keyword on the `addHead` method. 
+
+#### At the type level
+
+A function declared as `func foo(t : T, s : consuming S) → R` would have the type signature `(ℋ: r₀⟨⟩, r₁⟨⟩; Γ: t : r₀ T, s : r₁ S) → (ℋ: r₀⟨⟩, r₂⟨⟩; Γ: t : r₀ T, result: r₂ R)`. Note that the region of `t`, `r₁`, is present in the output type, but the region of `s`, `r₂`, is not.
+
+### Grouping
+
+By default, arguments to functions are assumed to come from distinct regions. This allows maximum expressivity within function bodies, as all arguments can be separately assigned into `iso` fields or sent to distinct threads. However, it does restrict the contexts in which the function can be called. In particular, values that could be aliases could not be used as the arguments, and values that were obtained through non-isolated fields of the same object could not be used. It may not be the case that this is the desired tradeoff for a given function. For example, the following utility function:
+
+```swift
+func compareBoxes<T>(⟨fst : Box<T>, snd : Box<T>⟩, cmp : Comparator<T>) {
+	return cmp.compare(fst.x, snd.x)
+}
+```
+
+This function body just reads non-isolated fields of each argument `fst` and `snd` and applies a provided comparator to them - it does not need `fst` and `snd` to come from distinct regions. To make this function callable in contexts in which `fst` and `snd` could be aliases, we place `⟨` `⟩` (angle brackets - could use more easily typeable notation) around the pair to indicate that we expect them to come from the same region. 
+
+#### At the type level
+
+A function declared as `func foo(⟨t : T, s : S⟩, r : R)` would have the type signature `(ℋ: r₀⟨⟩, r₁⟨⟩; Γ: t : r₀ T, s : r₀ S, r : r₁ R) → (<same as input context>)`. We note that the expected output context is the same as the input context, i.e. also grouped, because we do not expect the function body to split the single region `r₀` into two. 
+
+### Focus and Exploration
+
+Coming from the same region as another argument is not the only way that we can have "boutique callsites" that require special signatures. Recall that when a value pointed to by an `iso` field of an object is sent to another concurrency domain, e.g. by creation of a future, that particular field is "tombstoned" in the type of the region so that it is known to be inaccessible until the future is redeemed. For functions with standard signatures, that object could not be passed as an argument because the function body would expect to be able to access the `iso` field. To indicate that that is not the expectation, the signature could contain an input context like `ℋ: r⟨x[foo ↣ ⊥]⟩; Γ: x : r T` indicating the tombstone. 
+
+Similarly, it could be the case that a pointer relationship exists between the regions of two desired arguments to a function. Here, an example input context to the function would be `ℋ: r₀⟨x[foo ↣ r₁]⟩, r₁⟨⟩; Γ: x : r₀ T, y : r₁ T`. This function would be callable in contexts in which `x.foo` is in the same region as `y` for some `iso` field `T.foo`.
+
+Though we have a preliminary syntax for expressing all of these alternate heap shapes at function boundaries (described in detail in section 1 [here](https://www.cs.cornell.edu/andru/papers/gallifrey-types/appendix.pdf)), it may still be too verbose for incorporation into Swift and the level of expressiveness may need to be further refined.
+
+### Pinnedness
+
+Features such as region grouping, field tombstoning, and partial exploration as indicated above are all useful, but possibly overly specific. For example, in addition to being able to specify whether it is expected that two arguments come from the same region it could be useful to be able to not specify - to typecheck a function that would be valid both at callsites with arguments from distinct regions and from a single region. For this purpose and others, the fearless type system has a notion of *pinnedness*. A pinned region is one in which there could be additional heap structure present that is not represented in the current context. For example, a function whose input signature is `ℋ: r₀†⟨⟩, r₁†⟨⟩; Γ: x : r₀ T, y : r₁ T` (where `†` indicated a pinned region) is callable whether or not `x` and `y` come from the same region - the pinnedness indicates both regions could be larger than they appear. This restricts the body of the function from sending away those regions, calling functions on them that don't explicitly expect pinned regions, or accessing `iso` fields of objects in that region. Pinnedness is even more powerful in general, as it also abstracts over the focus and exploration discussed above, and can be augmented to describe *some* structure present in `ℋ` without the expectation that *all* structure is described. 
+
+Although it is a powerful construct that has some difficult implications to explain, pinnedness is powerful enough in simple use cases, and easy enough to annotate (just a flag that can be placed on any argument), that it is likely to be a useful thing to include in implementations of fearless types.
 
 ## Function Calls
 
@@ -469,8 +522,16 @@ In this section, talk about "the hard part" of typechecking - branch unification
 
 In this section, explain that just starting to use `async` functions with direct `await` calls is no problem - it's typed the same as a regular function invocation - but with futures we need to "move parts of ℋ" into a separate context to indicate that they're gone but they'll be back. Investigate ways to make this ergonomic.
 
+## Handling Value Types
+
+The semantics of value types differs from that discussed in most of this proposal in that providing a value typed value to two concurrent threads does not yield a race because there is not a possibility for concurrent modification. For structs/classes/actors, this is additionally 
+
 
 ## Design Decisions to be Made
+
+### How should this type system handle reentrant actors?
+
+Violations to the heap invariant are allowed to arise during execution of method bodies, but are expected not to exist at function calls. In the context of reentrant actors, this implies that all possible suspension points should require the heap invariants to hold for the actor's state because new calls could be invoked while suspended. This could be restrictive, but is the best bet that doesn't introduce blocking in some form.
 
 ### Should fancier function signatures be exposed?
 
@@ -482,6 +543,7 @@ This can be good for documenting isolation reasoning, and possibly hinting to th
 
 Swift already uses the word "isolated" in the context of "actor-isolated" storage. Perhaps a distinct name would be easier. Here are some ideas:
 
+* Isolatable
 * Region
 * Boundary
 * Bounding
