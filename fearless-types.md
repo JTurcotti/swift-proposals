@@ -34,15 +34,14 @@ protocol Server {
 	func process(box : IntBox) async
 }
 
-actor NonRacyServer : Server {
+class NonRacyServer : Server {
 	func process(box : IntBox) {
-		// for this actor to modify the contents of a passed box - it must *take ownership* of the box
-		box.x = box.x + 1
-		// after the call, ownership is returned to the calling actor
+		//manipulate the contexts of `box` - temporarily "taking ownership" of it
+		box.x += 1
   }
 }
 
-actor Client {
+class Client {
 	let box : IntBox = IntBox()
 	let server : Server = NonRacyServer()
 
@@ -62,7 +61,7 @@ actor Client {
 This example works out of the box with any reasonable linear ownership type system. If a race-causing bug were introduced, it would be easily caught as well. For example, consider the following `RacyServer` that keeps a reference to any `IntBox` it is passed, using that reference the next time its `process` function is called. This code is race-prone because a client that uses `RacyServer` for processing could continue to update its state after `process` returns, not realizing the server is accessing that state while serving another client. From an ownership perspective, the assignment `oldBox = box` transfers ownership of `box` from the local context to the field `oldBox`, so ownership is not free to be returned to the caller. Thus this example would not typecheck in a linear ownership system.
 
 ```swift
-actor RacyServer : Server {
+class RacyServer : Server {
 	var oldBox : IntBox = IntBox()
 	
 	func process(box : IntBox) {
@@ -70,7 +69,7 @@ actor RacyServer : Server {
 		box.x = box.x + oldBox.x
 		// transfers ownership to the field `oldBox`
 		oldBox = box
-		// Error: cannot return ownership of `box` to the caller because the field `oldBox` has ownership instead
+		// Error: cannot return ownership of `box` to the caller because the field `oldBox` owns it instead
 	}
 }
 ```
