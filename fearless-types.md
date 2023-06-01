@@ -2,6 +2,41 @@
 
 * Authors: [Joshua Turcotti](https://github.com/JTurcotti)
 
+<!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-refresh-toc -->
+**Table of Contents**
+
+- [An Intro to Fearless Types in Swift](#an-intro-to-fearless-types-in-swift)
+    - [Introduction](#introduction)
+    - [Linear Ownership Types](#linear-ownership-types)
+    - [Fearless Types](#fearless-types)
+        - [Implementation](#implementation)
+    - [Regions and Pointers](#regions-and-pointers)
+    - [Isolated Fields](#isolated-fields)
+        - [More Expressiveness Differences between Isolated and Non-Isolated fields](#more-expressiveness-differences-between-isolated-and-non-isolated-fields)
+            - [2-Arg Initializer](#2-arg-initializer)
+            - [1-Arg Initializer.](#1-arg-initializer)
+            - [Parallel process](#parallel-process)
+    - [Function Signatures](#function-signatures)
+        - [Consuming](#consuming)
+            - [At the type level](#at-the-type-level)
+        - [Grouping](#grouping)
+            - [At the type level](#at-the-type-level-1)
+        - [Focus and Exploration](#focus-and-exploration)
+        - [Pinnedness](#pinnedness)
+    - [Function Calls](#function-calls)
+    - [Branch Unification](#branch-unification)
+    - [Programming with Concurrency and Futures](#programming-with-concurrency-and-futures)
+    - [Handling Value Types](#handling-value-types)
+    - [Design Decisions to be Made](#design-decisions-to-be-made)
+        - [Should exception handling sites require simple state](#should-exception-handling-sites-require-simple-state)
+        - [How should this type system handle reentrant actors?](#how-should-this-type-system-handle-reentrant-actors)
+        - [Should fancier function signatures be exposed?](#should-fancier-function-signatures-be-exposed)
+        - [Exposing assertions about `ℋ`](#exposing-assertions-about-ℋ)
+        - [Alternative names for "isolated"](#alternative-names-for-isolated)
+
+<!-- markdown-toc end -->
+
+
 ## Introduction
 
 Swift allows values to be sent between concurrency domains only if their type ensures the resulting sharing is safe (i.e. cannot lead to data races).
@@ -258,13 +293,18 @@ extension IsoPair<T> {
 		let temp = left
 		// ℋ: r₀⟨self[left ↣ r₁]⟩, r₁⟨⟩; Γ: self: r₀ IsoPair<T>, temp : r₁ T
 		// ↑ can be implicitly elaborated to ↓ - this is called "focus and explore"
-		// ℋ: r₀⟨self[left ↣ r₂, right ↣ r₁]⟩, r₁⟨⟩, r₂⟨⟩; Γ: self: r₀ IsoPair<T>, temp : r₁ T //tree invariant holds
-		left = right //after this assignment, `left` and `right` alias each other
-		// ℋ: r₀⟨self[left ↣ r₂, right ↣ r₂]⟩, r₁⟨⟩, r₂⟨⟩; Γ: self: r₀ IsoPair<T>, temp : r₁ T //tree invariant broken
+		// ℋ: r₀⟨self[left ↣ r₂, right ↣ r₁]⟩, r₁⟨⟩, r₂⟨⟩; Γ: self: r₀ IsoPair<T>, temp : r₁ T
+		//tree invariant holds
+		left = right
+		//after this assignment, `left` and `right` alias each other
+		// ...so tree invariant broken
+		// ℋ: r₀⟨self[left ↣ r₂, right ↣ r₂]⟩, r₁⟨⟩, r₂⟨⟩; Γ: self: r₀ IsoPair<T>, temp : r₁ T
 		right = temp
-		// ℋ: r₀⟨self[left ↣ r₂, right ↣ r₁]⟩, r₁⟨⟩, r₂⟨⟩; Γ: self: r₀ IsoPair<T>, temp : r₁ T //tree invariant holds
+		// ℋ: r₀⟨self[left ↣ r₂, right ↣ r₁]⟩, r₁⟨⟩, r₂⟨⟩; Γ: self: r₀ IsoPair<T>, temp : r₁ T 
+		//tree invariant is restored
 		// ↑ can be implicitly simplified to ↓ - this is called "retract and unfocus"
-		// ℋ: r₀⟨⟩; Γ: self: r₀ IsoPair<T>, temp : r₁ T //note `temp` is still in scope as a variable, but inaccessible - its region has been dropped
+		// ℋ: r₀⟨⟩; Γ: self: r₀ IsoPair<T>, temp : r₁ T 
+		//note `temp` is still in scope as a variable, but inaccessible - its region has been dropped
 	}
 }
 ```
@@ -302,11 +342,14 @@ The 2-arg initializer typechecks in both `Pair` and `IsoPair`, but with slightly
 class Pair<T> {
 	...
 	func init(l : T, r : T) {
-		// ℋ: r₀⟨⟩, r₁⟨⟩, r₂⟨⟩; Γ: self: r₀ Pair<T>, l: r₁ T, r: r₂ T //each arg comes from a distinct region
+		//each arg comes from a distinct region
+		// ℋ: r₀⟨⟩, r₁⟨⟩, r₂⟨⟩; Γ: self: r₀ Pair<T>, l: r₁ T, r: r₂ T
 		// ↑ can be implicitly coerced to ↓ - this is called "attach"
-		// ℋ: r₀⟨⟩, r₂⟨⟩; Γ: self: r₀ Pair<T>, l: r₀ T, r: r₂ T //can only assign non-isolated fields of a value to another value in the same region
+		// ℋ: r₀⟨⟩, r₂⟨⟩; Γ: self: r₀ Pair<T>, l: r₀ T, r: r₂ T
+		//can only assign non-isolated fields of a value to another value in the same region
 		left = l
-		// ℋ: r₀⟨⟩, r₂⟨⟩; Γ: self: r₀ Pair<T>, l: r₀ T, r: r₂ T //assignment has no effect on typing context
+		//assignment has no effect on typing context
+		// ℋ: r₀⟨⟩, r₂⟨⟩; Γ: self: r₀ Pair<T>, l: r₀ T, r: r₂ T
 		// ↑ can be implicitly coerced to ↓ - this is another "attach"
 		// ℋ: r₀⟨⟩; Γ: self: r₀ Pair<T>, l: r₀ T, r: r₀ T
 		right = r
@@ -403,7 +446,9 @@ class Pair<T> {
 		// ℋ: r₀⟨⟩; Γ: self: r₀ Pair<T>; Φ: ∅
 		async let l_handle = l_server.process(left)
 		// ℋ: ∅; Γ: self: r₀ Pair<T>; Φ: l_handle: (r₀⟨⟩, ∅, ∅)
-		async let r_handle = r_server.process(right) //Error: `self` not accessible - region is held by future handle `l_handle`
+		
+		//Error: `self` not accessible - region is held by future handle `l_handle`
+		async let r_handle = r_server.process(right)
 		await l_handle
 		await r_handle
 	}
