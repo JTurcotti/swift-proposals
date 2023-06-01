@@ -116,18 +116,18 @@ The issue here is that *each value is individually linear* (resembling the [move
 extension Client {
 	func possiblyAliasingMain() async {
 		let definiteAlias = box //`box` is in a region
-        let possibleAlias = if ... ? IntBox() : box //same region as `box` due to possible aliasing
-        let notAlias = IntBox() //`notAlias` gets a fresh region
-        
-        async let handle = server.process(box: box)
-        
-        print(notAlias) //safe - was not in the region that was sent
-        print(possibleAlias) //Error: unsafe - in the sent region
-        print(box) //Error: unsafe - in the sent region
-        
-        await handle
-        
-        //all three variable safe to access again
+		let possibleAlias = if ... ? IntBox() : box //same region as `box` due to possible aliasing
+		let notAlias = IntBox() //`notAlias` gets a fresh region
+		
+		async let handle = server.process(box: box)
+		
+		print(notAlias) //safe - was not in the region that was sent
+		print(possibleAlias) //Error: unsafe - in the sent region
+		print(box) //Error: unsafe - in the sent region
+		
+		await handle
+		
+		//all three variable safe to access again
     }
 }
 ```
@@ -528,6 +528,8 @@ The semantics of value types differs from that discussed in most of this proposa
 
 
 ## Design Decisions to be Made
+
+### Should exception handling sites require simple state
 
 ### How should this type system handle reentrant actors?
 
